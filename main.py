@@ -11,9 +11,9 @@ from datetime import datetime
 # =========================
 
 MIN_PRICE = 100
-MIN_AGE_YEARS = 3
-VOLUME_LOOKBACK = 12
 MIN_VOLUME_RATIO = 1.8
+VOLUME_LOOKBACK = 12
+RECENT_HIGH_LOOKBACK_YEARS = 3  # IMPORTANT NEW RULE
 
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
@@ -22,11 +22,10 @@ TO_EMAIL = os.getenv("TO_EMAIL")
 results = []
 
 # =========================
-# SAFE SCALAR HELPER
+# SAFE SCALAR
 # =========================
 
 def s(x):
-    """Force any yfinance output into clean float scalar"""
     return float(np.asarray(x).squeeze())
 
 # =========================
@@ -53,12 +52,8 @@ for stock in stocks:
             progress=False
         )
 
-        if df is None or df.empty or len(df) < 50:
+        if df is None or df.empty or len(df) < 60:
             continue
-
-        # =========================
-        # DATA CLEAN
-        # =========================
 
         close = df["Close"].to_numpy()
         high = df["High"].to_numpy()
@@ -72,21 +67,33 @@ for stock in stocks:
             continue
 
         # =========================
-        # ATH LOGIC
+        # TRUE ATH
         # =========================
 
         hist_high = high[:-1]
 
         ath_price = s(np.max(hist_high))
         ath_index = int(np.argmax(hist_high))
-
         ath_date = dates[ath_index]
+
         current_date = dates[-1]
 
-        years_since_ath = (current_date - ath_date).days / 365.25
+        # =========================
+        # KEY FILTER: RECENT HIGH CHECK
+        # =========================
 
-        if years_since_ath < MIN_AGE_YEARS:
+        recent_period = dates[-36] if len(dates) >= 36 else dates[0]
+        recent_high = np.max(high[-36:]) if len(high) >= 36 else np.max(high)
+
+        # If stock made ATH or near ATH recently → reject
+        near_recent_high = recent_high >= 0.95 * ath_price
+
+        if near_recent_high:
             continue
+
+        # =========================
+        # BREAKOUT CONDITION
+        # =========================
 
         breakout = current_close > ath_price
 
@@ -94,11 +101,10 @@ for stock in stocks:
             continue
 
         # =========================
-        # VOLUME LOGIC
+        # VOLUME CONDITION
         # =========================
 
-        hist_volume = volume[:-1]
-        avg_volume = s(np.mean(hist_volume[-VOLUME_LOOKBACK:]))
+        avg_volume = s(np.mean(volume[-VOLUME_LOOKBACK:-1]))
 
         if avg_volume == 0:
             continue
@@ -118,22 +124,23 @@ STOCK: {stock}
 
 ATH: {ath_price:.2f}
 Close: {current_close:.2f}
-ATH Age: {years_since_ath:.1f} years
 Volume Spike: {volume_ratio:.2f}x
+
+Status: Multi-year base breakout (no recent highs)
             """
         )
 
     except Exception as e:
-        print(f"ERROR in {stock}: {e}")
+        print("ERROR in", stock, e)
 
 # =========================
 # EMAIL
 # =========================
 
-body = "\n\n-----------------\n\n".join(results) if results else "No breakouts found."
+body = "\n\n-----------------\n\n".join(results) if results else "No valid breakouts found."
 
 msg = MIMEText(body)
-msg["Subject"] = f"NSE Breakout Scanner - {datetime.now().date()}"
+msg["Subject"] = f"Multi-Year Breakout Scanner - {datetime.now().date()}"
 msg["From"] = EMAIL_ADDRESS
 msg["To"] = TO_EMAIL
 
