@@ -1,8 +1,7 @@
-import requests
+import yfinance as yf
 import numpy as np
-import time
-import smtplib
 import os
+import smtplib
 
 from email.mime.text import MIMEText
 from datetime import datetime
@@ -11,72 +10,23 @@ from datetime import datetime
 # SETTINGS
 # =========================
 
-MIN_AGE_YEARS = 3
-VOLUME_LOOKBACK = 12
-MIN_VOLUME_RATIO = 1.8
 MIN_PRICE = 100
+MIN_VOLUME_RATIO = 1.8
+VOLUME_LOOKBACK = 12
+MIN_AGE_YEARS = 3
 
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 TO_EMAIL = os.getenv("TO_EMAIL")
 
-session = requests.Session()
-
-# Fake browser headers (IMPORTANT for NSE)
-HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.nseindia.com"
-}
-
-# =========================
-# NSE FUNCTIONS
-# =========================
-
-def get_monthly_data(symbol):
-    """
-    Fetch historical data from NSE chart API
-    """
-
-    url = f"https://www.nseindia.com/api/chart-databyindex?index={symbol}&indices=true"
-
-    try:
-        session.get("https://www.nseindia.com", headers=HEADERS, timeout=5)
-        time.sleep(0.5)
-
-        r = session.get(url, headers=HEADERS, timeout=10)
-
-        if r.status_code != 200:
-            return None
-
-        data = r.json()
-
-        # NSE returns nested structure
-        prices = data.get("grapthData", [])
-
-        if not prices:
-            return None
-
-        # Convert to numpy array (close prices only simplified model)
-        closes = np.array([p[1] for p in prices], dtype=float)
-
-        volumes = np.array([p[2] if len(p) > 2 else 1 for p in prices], dtype=float)
-
-        return closes, volumes
-
-    except Exception as e:
-        print("Fetch error:", e)
-        return None
+results = []
 
 # =========================
 # STOCK LIST
 # =========================
 
 with open("stocks.txt") as f:
-    stocks = [s.strip() for s in f.readlines() if s.strip()]
-
-results = []
+    stocks = [x.strip() for x in f.readlines() if x.strip()]
 
 # =========================
 # SCANNER
@@ -85,17 +35,23 @@ results = []
 for stock in stocks:
 
     try:
-        print(f"Checking {stock}")
+        print("Checking", stock)
 
-        data = get_monthly_data(stock)
+        df = yf.download(
+            stock,
+            period="max",
+            interval="1mo",
+            auto_adjust=True,
+            progress=False
+        )
 
-        if not data:
+        if df is None or df.empty or len(df) < 50:
             continue
 
-        close, volume = data
-
-        if len(close) < 40:
-            continue
+        close = df["Close"].to_numpy()
+        high = df["High"].to_numpy()
+        volume = df["Volume"].to_numpy()
+        dates = df.index
 
         current_close = float(close[-1])
         current_volume = float(volume[-1])
@@ -107,21 +63,25 @@ for stock in stocks:
         # ATH LOGIC
         # =========================
 
-        ath_price = float(np.max(close[:-1]))
-        ath_index = int(np.argmax(close[:-1]))
+        hist_high = high[:-1]
+        ath_price = float(np.max(hist_high))
+        ath_index = np.argmax(hist_high)
 
-        years_since_ath = 10  # simplified safe fallback
+        ath_date = dates[ath_index]
+        current_date = dates[-1]
+
+        years_since_ath = (current_date - ath_date).days / 365.25
+
+        if years_since_ath < MIN_AGE_YEARS:
+            continue
 
         breakout = current_close > ath_price
 
         if not breakout:
             continue
 
-        if years_since_ath < MIN_AGE_YEARS:
-            continue
-
         # =========================
-        # VOLUME LOGIC
+        # VOLUME
         # =========================
 
         avg_volume = np.mean(volume[-VOLUME_LOOKBACK:-1])
@@ -142,14 +102,15 @@ for stock in stocks:
             f"""
 STOCK: {stock}
 
-Breakout Above ATH: {ath_price:.2f}
+ATH: {ath_price:.2f}
 Close: {current_close:.2f}
-Volume Spike: {volume_ratio:.2f}x
+Age: {years_since_ath:.1f} years
+Volume: {volume_ratio:.2f}x
             """
         )
 
     except Exception as e:
-        print(f"ERROR in {stock}: {e}")
+        print("ERROR in", stock, e)
 
 # =========================
 # EMAIL
@@ -168,7 +129,6 @@ try:
     server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
     server.send_message(msg)
     server.quit()
-
     print("EMAIL SENT SUCCESSFULLY")
 
 except Exception as e:
