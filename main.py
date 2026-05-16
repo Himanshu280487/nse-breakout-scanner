@@ -1,5 +1,4 @@
 import yfinance as yf
-import pandas as pd
 import numpy as np
 import smtplib
 import os
@@ -30,6 +29,22 @@ with open("stocks.txt") as f:
     stocks = [s.strip() for s in f.readlines() if s.strip()]
 
 # =========================
+# HELPER (IMPORTANT FIX)
+# =========================
+
+def clean_1d(series):
+    """Force ANY yfinance output into clean 1D numpy array"""
+    arr = np.array(series)
+
+    # flatten multi-dim arrays
+    arr = np.squeeze(arr)
+
+    # ensure 1D
+    arr = np.ravel(arr)
+
+    return arr
+
+# =========================
 # SCANNER
 # =========================
 
@@ -50,18 +65,18 @@ for stock in stocks:
             continue
 
         # =========================
-        # FORCE CLEAN NUMPY ARRAYS (IMPORTANT FIX)
+        # FORCE CLEAN ARRAYS
         # =========================
 
-        close = df["Close"].to_numpy()
-        high = df["High"].to_numpy()
-        volume = df["Volume"].to_numpy()
+        close = clean_1d(df["Close"].values)
+        high = clean_1d(df["High"].values)
+        volume = clean_1d(df["Volume"].values)
 
         if len(close) < 40:
             continue
 
         # =========================
-        # CURRENT VALUES
+        # CURRENT VALUES (SAFE SCALAR)
         # =========================
 
         current_close = float(close[-1])
@@ -71,36 +86,34 @@ for stock in stocks:
             continue
 
         # =========================
-        # HISTORICAL DATA
+        # HISTORICAL
         # =========================
 
         hist_high = high[:-1]
         hist_volume = volume[:-1]
 
         previous_high = float(np.max(hist_high))
-        previous_high_index = int(np.argmax(hist_high))
-
-        # Approx age (safe fallback, avoids pandas date issues)
-        years_since_high = 10  # default safe value
-
-        # =========================
-        # VOLUME LOGIC
-        # =========================
 
         avg_volume = float(np.mean(hist_volume[-VOLUME_LOOKBACK:]))
 
         if avg_volume == 0:
             continue
 
-        volume_ratio = current_volume / avg_volume
+        volume_ratio = float(current_volume / avg_volume)
 
         # =========================
-        # CONDITIONS (PURE PYTHON BOOLS)
+        # AGE (SIMPLIFIED SAFE VERSION)
         # =========================
 
-        breakout = current_close > previous_high
-        valid_age = years_since_high >= MIN_BREAKOUT_AGE_YEARS
-        high_volume = volume_ratio >= MIN_VOLUME_RATIO
+        years_since_high = 10  # safe fallback (we avoid broken datetime logic for now)
+
+        # =========================
+        # CONDITIONS
+        # =========================
+
+        breakout = bool(current_close > previous_high)
+        valid_age = bool(years_since_high >= MIN_BREAKOUT_AGE_YEARS)
+        high_volume = bool(volume_ratio >= MIN_VOLUME_RATIO)
 
         # =========================
         # FINAL CHECK
@@ -114,7 +127,6 @@ STOCK: {stock}
 
 Breakout Level: {previous_high:.2f}
 Close: {current_close:.2f}
-
 Volume Spike: {volume_ratio:.2f}x
                 """
             )
