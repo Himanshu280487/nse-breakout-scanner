@@ -2,7 +2,7 @@ name: NSE Breakout Scanner
 
 on:
   schedule:
-    - cron: "30 21 * * 6"
+    - cron: "30 21 * * 6"   # Saturday 3:00 AM IST
   workflow_dispatch:
 
 jobs:
@@ -23,5 +23,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run scanner
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
           python main.py
