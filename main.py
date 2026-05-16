@@ -59,7 +59,7 @@ for stock in stocks:
 
         # Current month data
         current_close = df["Close"].iloc[-1]
-        current_volume = df["Volume"].iloc[-1]
+        current_volume = float(df["Volume"].iloc[-1])
 
         # Ignore cheap stocks
         if current_close < MIN_PRICE:
@@ -69,7 +69,7 @@ for stock in stocks:
         historical_df = df.iloc[:-1]
 
         # Previous all-time high
-        previous_high = historical_df["High"].max()
+        previous_high = float(historical_df["High"].max())
 
         # Date of previous ATH
         previous_high_date = historical_df["High"].idxmax()
@@ -83,9 +83,7 @@ for stock in stocks:
         ).days / 365.25
 
         # Average volume
-        avg_volume = historical_df["Volume"].iloc[
-            -VOLUME_LOOKBACK:
-        ].mean()
+        avg_volume = float(historical_df["Volume"].iloc[-VOLUME_LOOKBACK:].mean())
 
         # Volume ratio
         volume_ratio = current_volume / avg_volume
