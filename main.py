@@ -1,7 +1,9 @@
 import yfinance as yf
 import numpy as np
+import requests
 import os
 import smtplib
+import time
 
 from email.mime.text import MIMEText
 from datetime import datetime
@@ -13,12 +15,36 @@ from datetime import datetime
 MIN_PRICE = 100
 VOLUME_LOOKBACK = 12
 MIN_VOLUME_RATIO = 1.8
+BATCH_SIZE = 50
 
-EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-TO_EMAIL = os.getenv("TO_EMAIL")
+EMAIL_ADDRESS = os.getenv("himanshudrockinguy@gmail.com")
+EMAIL_PASSWORD = os.getenv("bdpy nnsy xjdr svno")
+TO_EMAIL = os.getenv("himanshudrockinguy@gmail.com")
 
 results = []
+
+# =========================
+# NSE STOCK UNIVERSE
+# =========================
+
+def get_nse_stocks():
+    url = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    r = requests.get(url, headers=headers, timeout=15)
+    lines = r.text.splitlines()[1:]
+
+    stocks = []
+
+    for line in lines:
+        try:
+            symbol = line.split(",")[0].strip()
+            if symbol:
+                stocks.append(symbol + ".NS")
+        except:
+            continue
+
+    return list(set(stocks))
 
 # =========================
 # SAFE SCALAR
@@ -28,157 +54,115 @@ def s(x):
     return float(np.asarray(x).squeeze())
 
 # =========================
-# STOCK LIST
+# SCANNER LOGIC
 # =========================
 
-with open("stocks.txt") as f:
-    stocks = [x.strip() for x in f.readlines() if x.strip()]
+stocks = get_nse_stocks()
 
-# =========================
-# SCANNER
-# =========================
+print(f"Total stocks loaded: {len(stocks)}")
 
-for stock in stocks:
+for i in range(0, len(stocks), BATCH_SIZE):
 
-    try:
-        print("Checking", stock)
+    batch = stocks[i:i + BATCH_SIZE]
 
-        df = yf.download(
-            stock,
-            period="max",
-            interval="1mo",
-            auto_adjust=True,
-            progress=False
-        )
+    for stock in batch:
 
-        if df is None or df.empty or len(df) < 60:
-            continue
+        try:
+            print("Checking", stock)
 
-        close = df["Close"].to_numpy()
-        high = df["High"].to_numpy()
-        volume = df["Volume"].to_numpy()
+            df = yf.download(
+                stock,
+                period="max",
+                interval="1mo",
+                auto_adjust=True,
+                progress=False
+            )
 
-        current_close = s(close[-1])
-        current_volume = s(volume[-1])
+            if df is None or df.empty or len(df) < 60:
+                continue
 
-        if current_close < MIN_PRICE:
-            continue
+            close = df["Close"].to_numpy()
+            high = df["High"].to_numpy()
+            volume = df["Volume"].to_numpy()
 
-        # =========================
-        # ATH BREAKOUT LOGIC
-        # =========================
+            current_close = s(close[-1])
+            current_volume = s(volume[-1])
 
-        hist_high = high[:-1]
-        ath_price = s(np.max(hist_high))
+            if current_close < MIN_PRICE:
+                continue
 
-        breakout = current_close > ath_price
+            # =========================
+            # ATH BREAKOUT
+            # =========================
 
-        if not breakout:
-            continue
+            ath_price = s(np.max(high[:-1]))
+            breakout = current_close > ath_price
 
-        # =========================
-        # VOLUME SCORE
-        # =========================
+            if not breakout:
+                continue
 
-        avg_volume = s(np.mean(volume[-VOLUME_LOOKBACK:-1]))
+            # =========================
+            # VOLUME
+            # =========================
 
-        if avg_volume == 0:
-            continue
+            avg_volume = s(np.mean(volume[-VOLUME_LOOKBACK:-1]))
 
-        volume_ratio = current_volume / avg_volume
+            if avg_volume == 0:
+                continue
 
-        # =========================
-        # BASE STRENGTH (how long it stayed below ATH)
-        # =========================
+            volume_ratio = current_volume / avg_volume
 
-        base_period = np.where(close[:-1] < ath_price)[0]
-        base_length = len(base_period)
+            if volume_ratio < MIN_VOLUME_RATIO:
+                continue
 
-        base_score = min(base_length / 60 * 30, 30)  # max 30 points
+            # =========================
+            # STRENGTH SCORE
+            # =========================
 
-        # =========================
-        # BREAKOUT STRENGTH
-        # =========================
+            breakout_strength = ((current_close - ath_price) / ath_price) * 100
+            breakout_score = min(max(breakout_strength * 2, 0), 30)
 
-        breakout_strength = ((current_close - ath_price) / ath_price) * 100
-        breakout_score = min(max(breakout_strength * 2, 0), 30)
+            volume_score = min(volume_ratio * 10, 40)
 
-        # =========================
-        # VOLUME SCORE
-        # =========================
+            base_score = 30  # simplified stable base
 
-        volume_score = min(volume_ratio * 10, 30)
+            score = min(base_score + breakout_score + volume_score, 100)
 
-        # =========================
-        # VOLATILITY SCORE (lower volatility = better)
-        # =========================
+            if score < 60:
+                continue
 
-        returns = np.diff(close[-12:]) / close[-12:-1]
-        volatility = np.std(returns)
+            if score >= 80:
+                quality = "🔥 STRONG BREAKOUT"
+            elif score >= 70:
+                quality = "⚡ GOOD BREAKOUT"
+            else:
+                quality = "⚠️ WEAK BREAKOUT"
 
-        volatility_score = max(20 - volatility * 100, 0)
-
-        # =========================
-        # TOTAL SCORE
-        # =========================
-
-        score = base_score + breakout_score + volume_score + volatility_score
-        score = min(score, 100)
-
-        # =========================
-        # FAKE BREAKOUT FILTER
-        # =========================
-
-        is_fake = (
-            volume_ratio < 1.2 and
-            breakout_strength < 2
-        )
-
-        if is_fake:
-            continue
-
-        # =========================
-        # LABEL
-        # =========================
-
-        if score >= 75:
-            quality = "🔥 STRONG ACCUMULATION BREAKOUT"
-        elif score >= 55:
-            quality = "⚡ VALID BREAKOUT"
-        else:
-            quality = "⚠️ WEAK BREAKOUT"
-
-        # =========================
-        # RESULT
-        # =========================
-
-        results.append(
-            f"""
+            results.append(f"""
 STOCK: {stock}
 
-Breakout Above ATH: YES
+ATH Breakout: YES
 ATH: {ath_price:.2f}
 Close: {current_close:.2f}
 
 Volume Ratio: {volume_ratio:.2f}x
-Breakout Strength: {breakout_strength:.2f}%
+Score: {score:.1f}/100
+Quality: {quality}
+""")
 
-SCORE: {score:.1f}/100
-QUALITY: {quality}
-            """
-        )
+        except Exception as e:
+            print("Error in", stock, e)
 
-    except Exception as e:
-        print("ERROR in", stock, e)
+    time.sleep(10)  # prevents rate limit
 
 # =========================
-# EMAIL
+# EMAIL OUTPUT
 # =========================
 
-body = "\n\n-----------------\n\n".join(results) if results else "No strong breakouts found."
+body = "\n\n------------------------\n\n".join(results) if results else "No breakouts found."
 
 msg = MIMEText(body)
-msg["Subject"] = f"Breakout Strength Scanner - {datetime.now().date()}"
+msg["Subject"] = f"NSE Breakout Scanner - {datetime.now().date()}"
 msg["From"] = EMAIL_ADDRESS
 msg["To"] = TO_EMAIL
 
