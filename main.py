@@ -17,9 +17,9 @@ VOLUME_LOOKBACK = 12
 MIN_VOLUME_RATIO = 1.8
 BATCH_SIZE = 50
 
-EMAIL_ADDRESS = os.getenv("himanshudrockinguy@gmail.com")
-EMAIL_PASSWORD = os.getenv("bdpy nnsy xjdr svno")
-TO_EMAIL = os.getenv("himanshudrockinguy@gmail.com")
+EMAIL_ADDRESS = os.getenv("MAIL_USER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASS")
+TO_EMAIL = os.getenv("EMAIL_TO")
 
 results = []
 
