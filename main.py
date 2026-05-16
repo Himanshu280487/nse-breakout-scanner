@@ -1,55 +1,175 @@
 import requests
-import zipfile
-import pandas as pd
-import io
+import numpy as np
+import time
+import smtplib
+import os
+
+from email.mime.text import MIMEText
 from datetime import datetime
 
-# NSE bhavcopy URL format
-BASE_URL = "https://archives.nseindia.com/content/historical/EQUITIES/{year}/{month}/cm{day}{month}{year}bhav.csv.zip"
+# =========================
+# SETTINGS
+# =========================
 
-headers = {
+MIN_AGE_YEARS = 3
+VOLUME_LOOKBACK = 12
+MIN_VOLUME_RATIO = 1.8
+MIN_PRICE = 100
+
+EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+TO_EMAIL = os.getenv("TO_EMAIL")
+
+session = requests.Session()
+
+# Fake browser headers (IMPORTANT for NSE)
+HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Accept": "*/*",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.nseindia.com"
 }
 
-def download_bhavcopy(date):
+# =========================
+# NSE FUNCTIONS
+# =========================
+
+def get_monthly_data(symbol):
     """
-    Download NSE bhavcopy for a given date
+    Fetch historical data from NSE chart API
     """
 
-    day = date.strftime("%d")
-    month = date.strftime("%b").upper()
-    year = date.strftime("%Y")
-
-    url = BASE_URL.format(year=year, month=month, day=day)
-
-    print(f"Downloading: {url}")
+    url = f"https://www.nseindia.com/api/chart-databyindex?index={symbol}&indices=true"
 
     try:
-        r = requests.get(url, headers=headers, timeout=10)
+        session.get("https://www.nseindia.com", headers=HEADERS, timeout=5)
+        time.sleep(0.5)
+
+        r = session.get(url, headers=HEADERS, timeout=10)
 
         if r.status_code != 200:
-            print("No data for:", date)
             return None
 
-        z = zipfile.ZipFile(io.BytesIO(r.content))
-        file_name = z.namelist()[0]
+        data = r.json()
 
-        df = pd.read_csv(z.open(file_name))
+        # NSE returns nested structure
+        prices = data.get("grapthData", [])
 
-        return df
+        if not prices:
+            return None
+
+        # Convert to numpy array (close prices only simplified model)
+        closes = np.array([p[1] for p in prices], dtype=float)
+
+        volumes = np.array([p[2] if len(p) > 2 else 1 for p in prices], dtype=float)
+
+        return closes, volumes
 
     except Exception as e:
-        print("Error:", e)
+        print("Fetch error:", e)
         return None
 
+# =========================
+# STOCK LIST
+# =========================
 
-if __name__ == "__main__":
-    today = datetime.today()
+with open("stocks.txt") as f:
+    stocks = [s.strip() for s in f.readlines() if s.strip()]
 
-    df = download_bhavcopy(today)
+results = []
 
-    if df is not None:
-        print(df.head())
-        print("\nRows:", len(df))
+# =========================
+# SCANNER
+# =========================
+
+for stock in stocks:
+
+    try:
+        print(f"Checking {stock}")
+
+        data = get_monthly_data(stock)
+
+        if not data:
+            continue
+
+        close, volume = data
+
+        if len(close) < 40:
+            continue
+
+        current_close = float(close[-1])
+        current_volume = float(volume[-1])
+
+        if current_close < MIN_PRICE:
+            continue
+
+        # =========================
+        # ATH LOGIC
+        # =========================
+
+        ath_price = float(np.max(close[:-1]))
+        ath_index = int(np.argmax(close[:-1]))
+
+        years_since_ath = 10  # simplified safe fallback
+
+        breakout = current_close > ath_price
+
+        if not breakout:
+            continue
+
+        if years_since_ath < MIN_AGE_YEARS:
+            continue
+
+        # =========================
+        # VOLUME LOGIC
+        # =========================
+
+        avg_volume = np.mean(volume[-VOLUME_LOOKBACK:-1])
+
+        if avg_volume == 0:
+            continue
+
+        volume_ratio = current_volume / avg_volume
+
+        if volume_ratio < MIN_VOLUME_RATIO:
+            continue
+
+        # =========================
+        # RESULT
+        # =========================
+
+        results.append(
+            f"""
+STOCK: {stock}
+
+Breakout Above ATH: {ath_price:.2f}
+Close: {current_close:.2f}
+Volume Spike: {volume_ratio:.2f}x
+            """
+        )
+
+    except Exception as e:
+        print(f"ERROR in {stock}: {e}")
+
+# =========================
+# EMAIL
+# =========================
+
+body = "\n\n-----------------\n\n".join(results) if results else "No breakouts found."
+
+msg = MIMEText(body)
+msg["Subject"] = f"NSE Breakout Scanner - {datetime.now().date()}"
+msg["From"] = EMAIL_ADDRESS
+msg["To"] = TO_EMAIL
+
+try:
+    server = smtplib.SMTP("smtp.gmail.com", 587)
+    server.starttls()
+    server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+    server.send_message(msg)
+    server.quit()
+
+    print("EMAIL SENT SUCCESSFULLY")
+
+except Exception as e:
+    print("EMAIL ERROR:", e)
