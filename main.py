@@ -6,40 +6,39 @@ import os
 from email.mime.text import MIMEText
 from datetime import datetime
 
-# =========================================
+# =========================
 # SETTINGS
-# =========================================
+# =========================
 
 MIN_BREAKOUT_AGE_YEARS = 3
 VOLUME_LOOKBACK = 12
 MIN_VOLUME_RATIO = 1.8
 MIN_PRICE = 100
 
-# =========================================
-# EMAIL SETTINGS
-# =========================================
+# =========================
+# EMAIL CONFIG (Railway ENV)
+# =========================
 
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 TO_EMAIL = os.getenv("TO_EMAIL")
 
-# =========================================
+# =========================
 # LOAD STOCK LIST
-# =========================================
+# =========================
 
 with open("stocks.txt", "r") as f:
-    stocks = [line.strip() for line in f.readlines()]
+    stocks = [line.strip() for line in f.readlines() if line.strip()]
 
 results = []
 
-# =========================================
-# SCAN STOCKS
-# =========================================
+# =========================
+# SCANNER
+# =========================
 
 for stock in stocks:
 
     try:
-
         print(f"Checking {stock}")
 
         # Download monthly data
@@ -51,125 +50,113 @@ for stock in stocks:
             progress=False
         )
 
-        df.dropna(inplace=True)
-
-        # Need enough history
-        if len(df) < 36:
+        if df is None or df.empty:
             continue
 
-        # Current month data
-        current_close = df["Close"].iloc[-1]
-        current_volume = float(df["Volume"].iloc[-1])
+        # Keep only needed columns
+        df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
 
-        # Ignore cheap stocks
+        if len(df) < 40:
+            continue
+
+        # =========================
+        # CURRENT DATA (SAFE SCALARS)
+        # =========================
+
+        current_close = float(df["Close"].iat[-1])
+        current_volume = float(df["Volume"].iat[-1])
+
         if current_close < MIN_PRICE:
             continue
 
-        # Exclude current month
+        # =========================
+        # HISTORICAL DATA
+        # =========================
+
         historical_df = df.iloc[:-1]
 
-        # Previous all-time high
         previous_high = float(historical_df["High"].max())
-
-        # Date of previous ATH
         previous_high_date = historical_df["High"].idxmax()
 
-        # Current candle date
         current_date = df.index[-1]
 
-        # Years since previous ATH
         years_since_high = (
             current_date - previous_high_date
         ).days / 365.25
 
-        # Average volume
-        avg_volume = float(historical_df["Volume"].iloc[-VOLUME_LOOKBACK:].mean())
+        # =========================
+        # VOLUME LOGIC
+        # =========================
 
-        # Volume ratio
+        avg_volume = float(
+            historical_df["Volume"]
+            .tail(VOLUME_LOOKBACK)
+            .mean()
+        )
+
+        if avg_volume == 0:
+            continue
+
         volume_ratio = current_volume / avg_volume
 
-        # Conditions
-        valid_breakout_age = (
-            years_since_high >= MIN_BREAKOUT_AGE_YEARS
-        )
+        # =========================
+        # CONDITIONS
+        # =========================
 
-        breakout = (
-            current_close > previous_high
-        )
+        breakout = current_close > previous_high
 
-        high_volume = (
-            volume_ratio >= MIN_VOLUME_RATIO
-        )
+        valid_age = years_since_high >= MIN_BREAKOUT_AGE_YEARS
 
-        # Final condition
-        if (
-            valid_breakout_age
-            and breakout
-            and high_volume
-        ):
+        high_volume = volume_ratio >= MIN_VOLUME_RATIO
+
+        # =========================
+        # FINAL FILTER
+        # =========================
+
+        if breakout and valid_age and high_volume:
 
             results.append(
                 f"""
 STOCK: {stock}
 
-Breakout Above:
-{round(previous_high, 2)}
+Breakout Level: {round(previous_high, 2)}
+Level Age: {round(years_since_high, 1)} years
 
-Breakout Level Age:
-{round(years_since_high, 1)} years
-
-Current Close:
-{round(current_close, 2)}
-
-Volume Spike:
-{round(volume_ratio, 2)}x
+Current Close: {round(current_close, 2)}
+Volume Spike: {round(volume_ratio, 2)}x
                 """
             )
 
     except Exception as e:
-
         print(f"ERROR in {stock}: {e}")
 
-# =========================================
-# EMAIL BODY
-# =========================================
+# =========================
+# EMAIL CONTENT
+# =========================
 
 if results:
-
-    body = "\n\n====================\n\n".join(results)
-
+    body = "\n\n---------------------\n\n".join(results)
 else:
-
-    body = "No valid breakout stocks found."
-
-# =========================================
-# SEND EMAIL
-# =========================================
+    body = "No valid breakout stocks found today."
 
 msg = MIMEText(body)
 
-msg["Subject"] = (
-    f"NSE Breakout Scanner "
-    f"- {datetime.now().date()}"
-)
-
+msg["Subject"] = f"NSE Breakout Scanner - {datetime.now().date()}"
 msg["From"] = EMAIL_ADDRESS
 msg["To"] = TO_EMAIL
 
-server = smtplib.SMTP(
-    "smtp.gmail.com",
-    587
-)
+# =========================
+# SEND EMAIL
+# =========================
 
-server.starttls()
+try:
+    server = smtplib.SMTP("smtp.gmail.com", 587)
+    server.starttls()
+    server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+    server.send_message(msg)
+    server.quit()
 
-server.login(
-    EMAIL_ADDRESS,
-    EMAIL_PASSWORD
-)
+    print("EMAIL SENT SUCCESSFULLY")
 
-server.send_message(msg)
-
-server.quit()
-
-print("EMAIL SENT SUCCESSFULLY")
+except Exception as e:
+    print("EMAIL ERROR:", e)
