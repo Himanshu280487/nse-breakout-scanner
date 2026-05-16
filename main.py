@@ -10,7 +10,7 @@ from datetime import datetime
 # SETTINGS
 # =========================
 
-MIN_BREAKOUT_AGE_YEARS = 3
+MIN_AGE_YEARS = 3
 VOLUME_LOOKBACK = 12
 MIN_VOLUME_RATIO = 1.8
 MIN_PRICE = 100
@@ -26,23 +26,7 @@ results = []
 # =========================
 
 with open("stocks.txt") as f:
-    stocks = [s.strip() for s in f.readlines() if s.strip()]
-
-# =========================
-# HELPER (IMPORTANT FIX)
-# =========================
-
-def clean_1d(series):
-    """Force ANY yfinance output into clean 1D numpy array"""
-    arr = np.array(series)
-
-    # flatten multi-dim arrays
-    arr = np.squeeze(arr)
-
-    # ensure 1D
-    arr = np.ravel(arr)
-
-    return arr
+    stocks = [x.strip() for x in f.readlines() if x.strip()]
 
 # =========================
 # SCANNER
@@ -61,72 +45,71 @@ for stock in stocks:
             progress=False
         )
 
-        if df is None or df.empty:
+        if df is None or df.empty or len(df) < 50:
             continue
 
         # =========================
-        # FORCE CLEAN ARRAYS
+        # CLEAN DATA
         # =========================
 
-        close = clean_1d(df["Close"].values)
-        high = clean_1d(df["High"].values)
-        volume = clean_1d(df["Volume"].values)
+        df = df.dropna()
 
-        if len(close) < 40:
-            continue
-
-        # =========================
-        # CURRENT VALUES (SAFE SCALAR)
-        # =========================
+        close = df["Close"].values
+        high = df["High"].values
+        volume = df["Volume"].values
+        dates = df.index
 
         current_close = float(close[-1])
         current_volume = float(volume[-1])
+        current_date = dates[-1]
 
         if current_close < MIN_PRICE:
             continue
 
         # =========================
-        # HISTORICAL
+        # TRUE ATH LOGIC
         # =========================
 
-        hist_high = high[:-1]
+        ath_index = np.argmax(high)
+        ath_price = float(high[ath_index])
+        ath_date = dates[ath_index]
+
+        years_since_ath = (current_date - ath_date).days / 365.25
+
+        # must be REAL old base
+        if years_since_ath < MIN_AGE_YEARS:
+            continue
+
+        breakout = current_close > ath_price
+
+        # =========================
+        # VOLUME LOGIC
+        # =========================
+
         hist_volume = volume[:-1]
-
-        previous_high = float(np.max(hist_high))
-
-        avg_volume = float(np.mean(hist_volume[-VOLUME_LOOKBACK:]))
+        avg_volume = np.mean(hist_volume[-VOLUME_LOOKBACK:])
 
         if avg_volume == 0:
             continue
 
-        volume_ratio = float(current_volume / avg_volume)
+        volume_ratio = current_volume / avg_volume
 
-        # =========================
-        # AGE (SIMPLIFIED SAFE VERSION)
-        # =========================
-
-        years_since_high = 10  # safe fallback (we avoid broken datetime logic for now)
-
-        # =========================
-        # CONDITIONS
-        # =========================
-
-        breakout = bool(current_close > previous_high)
-        valid_age = bool(years_since_high >= MIN_BREAKOUT_AGE_YEARS)
-        high_volume = bool(volume_ratio >= MIN_VOLUME_RATIO)
+        high_volume = volume_ratio >= MIN_VOLUME_RATIO
 
         # =========================
         # FINAL CHECK
         # =========================
 
-        if breakout and valid_age and high_volume:
+        if breakout and high_volume:
 
             results.append(
                 f"""
 STOCK: {stock}
 
-Breakout Level: {previous_high:.2f}
-Close: {current_close:.2f}
+ATH Price: {ath_price:.2f}
+ATH Age: {years_since_ath:.1f} years
+
+Breakout Price: {current_close:.2f}
 Volume Spike: {volume_ratio:.2f}x
                 """
             )
@@ -138,10 +121,10 @@ Volume Spike: {volume_ratio:.2f}x
 # EMAIL
 # =========================
 
-body = "\n\n----------------\n\n".join(results) if results else "No breakouts found."
+body = "\n\n----------------\n\n".join(results) if results else "No valid breakouts found."
 
 msg = MIMEText(body)
-msg["Subject"] = f"NSE Breakout Scanner - {datetime.now().date()}"
+msg["Subject"] = f"NSE Multi-Year Breakout Scanner - {datetime.now().date()}"
 msg["From"] = EMAIL_ADDRESS
 msg["To"] = TO_EMAIL
 
