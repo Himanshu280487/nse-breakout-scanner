@@ -60,7 +60,9 @@ def s(x):
 stocks = get_nse_stocks()
 
 print(f"Total stocks loaded: {len(stocks)}")
-
+if len(stocks) == 0:
+    print("No stocks loaded - stopping")
+    exit()
 for i in range(0, len(stocks), BATCH_SIZE):
 
     batch = stocks[i:i + BATCH_SIZE]
