@@ -11,9 +11,8 @@ from datetime import datetime
 # =========================
 
 MIN_PRICE = 100
-MIN_VOLUME_RATIO = 1.8
 VOLUME_LOOKBACK = 12
-RECENT_HIGH_LOOKBACK_YEARS = 3  # IMPORTANT NEW RULE
+MIN_VOLUME_RATIO = 1.8
 
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
@@ -58,7 +57,6 @@ for stock in stocks:
         close = df["Close"].to_numpy()
         high = df["High"].to_numpy()
         volume = df["Volume"].to_numpy()
-        dates = df.index
 
         current_close = s(close[-1])
         current_volume = s(volume[-1])
@@ -67,33 +65,11 @@ for stock in stocks:
             continue
 
         # =========================
-        # TRUE ATH
+        # ATH BREAKOUT LOGIC
         # =========================
 
         hist_high = high[:-1]
-
         ath_price = s(np.max(hist_high))
-        ath_index = int(np.argmax(hist_high))
-        ath_date = dates[ath_index]
-
-        current_date = dates[-1]
-
-        # =========================
-        # KEY FILTER: RECENT HIGH CHECK
-        # =========================
-
-        recent_period = dates[-36] if len(dates) >= 36 else dates[0]
-        recent_high = np.max(high[-36:]) if len(high) >= 36 else np.max(high)
-
-        # If stock made ATH or near ATH recently → reject
-        near_recent_high = recent_high >= 0.95 * ath_price
-
-        if near_recent_high:
-            continue
-
-        # =========================
-        # BREAKOUT CONDITION
-        # =========================
 
         breakout = current_close > ath_price
 
@@ -101,7 +77,7 @@ for stock in stocks:
             continue
 
         # =========================
-        # VOLUME CONDITION
+        # VOLUME SCORE
         # =========================
 
         avg_volume = s(np.mean(volume[-VOLUME_LOOKBACK:-1]))
@@ -111,8 +87,66 @@ for stock in stocks:
 
         volume_ratio = current_volume / avg_volume
 
-        if volume_ratio < MIN_VOLUME_RATIO:
+        # =========================
+        # BASE STRENGTH (how long it stayed below ATH)
+        # =========================
+
+        base_period = np.where(close[:-1] < ath_price)[0]
+        base_length = len(base_period)
+
+        base_score = min(base_length / 60 * 30, 30)  # max 30 points
+
+        # =========================
+        # BREAKOUT STRENGTH
+        # =========================
+
+        breakout_strength = ((current_close - ath_price) / ath_price) * 100
+        breakout_score = min(max(breakout_strength * 2, 0), 30)
+
+        # =========================
+        # VOLUME SCORE
+        # =========================
+
+        volume_score = min(volume_ratio * 10, 30)
+
+        # =========================
+        # VOLATILITY SCORE (lower volatility = better)
+        # =========================
+
+        returns = np.diff(close[-12:]) / close[-12:-1]
+        volatility = np.std(returns)
+
+        volatility_score = max(20 - volatility * 100, 0)
+
+        # =========================
+        # TOTAL SCORE
+        # =========================
+
+        score = base_score + breakout_score + volume_score + volatility_score
+        score = min(score, 100)
+
+        # =========================
+        # FAKE BREAKOUT FILTER
+        # =========================
+
+        is_fake = (
+            volume_ratio < 1.2 and
+            breakout_strength < 2
+        )
+
+        if is_fake:
             continue
+
+        # =========================
+        # LABEL
+        # =========================
+
+        if score >= 75:
+            quality = "🔥 STRONG ACCUMULATION BREAKOUT"
+        elif score >= 55:
+            quality = "⚡ VALID BREAKOUT"
+        else:
+            quality = "⚠️ WEAK BREAKOUT"
 
         # =========================
         # RESULT
@@ -122,11 +156,15 @@ for stock in stocks:
             f"""
 STOCK: {stock}
 
+Breakout Above ATH: YES
 ATH: {ath_price:.2f}
 Close: {current_close:.2f}
-Volume Spike: {volume_ratio:.2f}x
 
-Status: Multi-year base breakout (no recent highs)
+Volume Ratio: {volume_ratio:.2f}x
+Breakout Strength: {breakout_strength:.2f}%
+
+SCORE: {score:.1f}/100
+QUALITY: {quality}
             """
         )
 
@@ -137,10 +175,10 @@ Status: Multi-year base breakout (no recent highs)
 # EMAIL
 # =========================
 
-body = "\n\n-----------------\n\n".join(results) if results else "No valid breakouts found."
+body = "\n\n-----------------\n\n".join(results) if results else "No strong breakouts found."
 
 msg = MIMEText(body)
-msg["Subject"] = f"Multi-Year Breakout Scanner - {datetime.now().date()}"
+msg["Subject"] = f"Breakout Strength Scanner - {datetime.now().date()}"
 msg["From"] = EMAIL_ADDRESS
 msg["To"] = TO_EMAIL
 
