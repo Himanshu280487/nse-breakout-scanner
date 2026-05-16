@@ -8,7 +8,7 @@ from datetime import datetime
 BASE_URL = "https://archives.nseindia.com/content/historical/EQUITIES/{year}/{month}/cm{day}{month}{year}bhav.csv.zip"
 
 headers = {
-    "User-Agent": "Mozilla/5.0",
+    "User-Agent": "Chrome/5.0",
     "Accept": "*/*",
     "Referer": "https://www.nseindia.com"
 }
