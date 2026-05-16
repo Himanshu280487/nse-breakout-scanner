@@ -11,15 +11,23 @@ from datetime import datetime
 # =========================
 
 MIN_PRICE = 100
-MIN_VOLUME_RATIO = 1.8
-VOLUME_LOOKBACK = 12
 MIN_AGE_YEARS = 3
+VOLUME_LOOKBACK = 12
+MIN_VOLUME_RATIO = 1.8
 
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 TO_EMAIL = os.getenv("TO_EMAIL")
 
 results = []
+
+# =========================
+# SAFE SCALAR HELPER
+# =========================
+
+def s(x):
+    """Force any yfinance output into clean float scalar"""
+    return float(np.asarray(x).squeeze())
 
 # =========================
 # STOCK LIST
@@ -48,13 +56,17 @@ for stock in stocks:
         if df is None or df.empty or len(df) < 50:
             continue
 
+        # =========================
+        # DATA CLEAN
+        # =========================
+
         close = df["Close"].to_numpy()
         high = df["High"].to_numpy()
         volume = df["Volume"].to_numpy()
         dates = df.index
 
-        current_close = float(close[-1])
-        current_volume = float(volume[-1])
+        current_close = s(close[-1])
+        current_volume = s(volume[-1])
 
         if current_close < MIN_PRICE:
             continue
@@ -64,8 +76,9 @@ for stock in stocks:
         # =========================
 
         hist_high = high[:-1]
-        ath_price = float(np.max(hist_high))
-        ath_index = np.argmax(hist_high)
+
+        ath_price = s(np.max(hist_high))
+        ath_index = int(np.argmax(hist_high))
 
         ath_date = dates[ath_index]
         current_date = dates[-1]
@@ -81,10 +94,11 @@ for stock in stocks:
             continue
 
         # =========================
-        # VOLUME
+        # VOLUME LOGIC
         # =========================
 
-        avg_volume = np.mean(volume[-VOLUME_LOOKBACK:-1])
+        hist_volume = volume[:-1]
+        avg_volume = s(np.mean(hist_volume[-VOLUME_LOOKBACK:]))
 
         if avg_volume == 0:
             continue
@@ -104,13 +118,13 @@ STOCK: {stock}
 
 ATH: {ath_price:.2f}
 Close: {current_close:.2f}
-Age: {years_since_ath:.1f} years
-Volume: {volume_ratio:.2f}x
+ATH Age: {years_since_ath:.1f} years
+Volume Spike: {volume_ratio:.2f}x
             """
         )
 
     except Exception as e:
-        print("ERROR in", stock, e)
+        print(f"ERROR in {stock}: {e}")
 
 # =========================
 # EMAIL
@@ -129,6 +143,7 @@ try:
     server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
     server.send_message(msg)
     server.quit()
+
     print("EMAIL SENT SUCCESSFULLY")
 
 except Exception as e:
