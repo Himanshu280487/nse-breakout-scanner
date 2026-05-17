@@ -94,15 +94,31 @@ for i in range(0, len(stocks), BATCH_SIZE):
                 continue
 
             # =========================
-            # ATH BREAKOUT
+            # 3-YEAR + LIFETIME BREAKOUT FILTER
             # =========================
 
-            ath_price = s(np.max(high[:-1]))
-            breakout = current_close > ath_price
+            ath = np.max(high)
+
+            # find all ATH occurrences (almost equal to max high)
+            ath_hits = np.where(high >= ath * 0.999)[0]
+
+            if len(ath_hits) == 0:
+                continue
+
+            last_ath_index = ath_hits[-1]
+            current_index = len(high) - 1
+
+            consolidation_months = current_index - last_ath_index
+
+            # MUST have at least 36 months (3 years) of no ATH
+            if consolidation_months < 36:
+                continue
+
+            # breakout condition (current price breaks lifetime high)
+            breakout = current_close >= ath
 
             if not breakout:
                 continue
-
             # =========================
             # VOLUME
             # =========================
