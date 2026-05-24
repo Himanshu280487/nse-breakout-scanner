@@ -93,7 +93,7 @@ def download_bhavcopy(date):
 
 
 if __name__ == "__main__":
-
+    print("Current IST Time:", datetime.now(ZoneInfo("Asia/Kolkata")))
     latest_day = get_latest_trading_day()
 
     df = download_bhavcopy(latest_day)
