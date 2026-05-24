@@ -1,175 +1,340 @@
-import requests
+import yfinance as yf
 import numpy as np
-import time
-import smtplib
+import pandas as pd
+import requests
 import os
+import smtplib
+import time
 
 from email.mime.text import MIMEText
 from datetime import datetime
 
-# =========================
-# SETTINGS
-# =========================
 
-MIN_AGE_YEARS = 3
-VOLUME_LOOKBACK = 12
-MIN_VOLUME_RATIO = 1.8
+# =====================================
+# SETTINGS
+# =====================================
+
 MIN_PRICE = 100
 
-EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-TO_EMAIL = os.getenv("TO_EMAIL")
+VOLUME_LOOKBACK = 12
+MIN_VOLUME_RATIO = 1.8
 
-session = requests.Session()
+BATCH_SIZE = 50
 
-# Fake browser headers (IMPORTANT for NSE)
-HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.nseindia.com"
-}
 
-# =========================
-# NSE FUNCTIONS
-# =========================
+# =====================================
+# EMAIL SETTINGS
+# =====================================
 
-def get_monthly_data(symbol):
-    """
-    Fetch historical data from NSE chart API
-    """
+EMAIL_ADDRESS = os.getenv("EMAIL_USER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASS")
+TO_EMAIL = os.getenv("EMAIL_TO")
 
-    url = f"https://www.nseindia.com/api/chart-databyindex?index={symbol}&indices=true"
 
-    try:
-        session.get("https://www.nseindia.com", headers=HEADERS, timeout=5)
-        time.sleep(0.5)
-
-        r = session.get(url, headers=HEADERS, timeout=10)
-
-        if r.status_code != 200:
-            return None
-
-        data = r.json()
-
-        # NSE returns nested structure
-        prices = data.get("grapthData", [])
-
-        if not prices:
-            return None
-
-        # Convert to numpy array (close prices only simplified model)
-        closes = np.array([p[1] for p in prices], dtype=float)
-
-        volumes = np.array([p[2] if len(p) > 2 else 1 for p in prices], dtype=float)
-
-        return closes, volumes
-
-    except Exception as e:
-        print("Fetch error:", e)
-        return None
-
-# =========================
-# STOCK LIST
-# =========================
-
-with open("stocks.txt") as f:
-    stocks = [s.strip() for s in f.readlines() if s.strip()]
+# =====================================
+# RESULTS
+# =====================================
 
 results = []
 
-# =========================
-# SCANNER
-# =========================
 
-for stock in stocks:
+# =====================================
+# NSE STOCK UNIVERSE
+# =====================================
+
+def get_nse_stocks():
+
+    url = (
+        "https://nsearchives.nseindia.com/"
+        "content/equities/EQUITY_L.csv"
+    )
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        ),
+        "Accept": "text/csv,*/*",
+        "Referer": "https://www.nseindia.com/"
+    }
 
     try:
-        print(f"Checking {stock}")
 
-        data = get_monthly_data(stock)
+        session = requests.Session()
 
-        if not data:
-            continue
-
-        close, volume = data
-
-        if len(close) < 40:
-            continue
-
-        current_close = float(close[-1])
-        current_volume = float(volume[-1])
-
-        if current_close < MIN_PRICE:
-            continue
-
-        # =========================
-        # ATH LOGIC
-        # =========================
-
-        ath_price = float(np.max(close[:-1]))
-        ath_index = int(np.argmax(close[:-1]))
-
-        years_since_ath = 10  # simplified safe fallback
-
-        breakout = current_close > ath_price
-
-        if not breakout:
-            continue
-
-        if years_since_ath < MIN_AGE_YEARS:
-            continue
-
-        # =========================
-        # VOLUME LOGIC
-        # =========================
-
-        avg_volume = np.mean(volume[-VOLUME_LOOKBACK:-1])
-
-        if avg_volume == 0:
-            continue
-
-        volume_ratio = current_volume / avg_volume
-
-        if volume_ratio < MIN_VOLUME_RATIO:
-            continue
-
-        # =========================
-        # RESULT
-        # =========================
-
-        results.append(
-            f"""
-STOCK: {stock}
-
-Breakout Above ATH: {ath_price:.2f}
-Close: {current_close:.2f}
-Volume Spike: {volume_ratio:.2f}x
-            """
+        session.get(
+            "https://www.nseindia.com",
+            headers=headers,
+            timeout=20
         )
 
+        response = session.get(
+            url,
+            headers=headers,
+            timeout=20
+        )
+
+        response.raise_for_status()
+
+        df = pd.read_csv(response.text.splitlines())
+
+        # Keep only EQ series
+        df = df[df[" SERIES"] == "EQ"]
+
+        stocks = (
+            df["SYMBOL"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            + ".NS"
+        ).tolist()
+
+        return sorted(list(set(stocks)))
+
     except Exception as e:
-        print(f"ERROR in {stock}: {e}")
 
-# =========================
+        print("NSE STOCK LOAD ERROR:", e)
+
+        return []
+
+
+# =====================================
+# SAFE SCALAR
+# =====================================
+
+def s(x):
+    return float(np.asarray(x).squeeze())
+
+
+# =====================================
+# LOAD STOCKS
+# =====================================
+
+print("\n========================")
+print("MAIN.PY STARTED")
+print("========================\n")
+
+print("Loading NSE stock universe...")
+
+stocks = get_nse_stocks()
+
+print(f"Stocks loaded: {len(stocks)}")
+
+if len(stocks) == 0:
+
+    print("No stocks loaded - stopping")
+
+    exit()
+
+
+# =====================================
+# SCANNER
+# =====================================
+
+for i in range(0, len(stocks), BATCH_SIZE):
+
+    batch = stocks[i:i + BATCH_SIZE]
+
+    for stock in batch:
+
+        try:
+
+            print("Checking", stock)
+
+            df = yf.download(
+                stock,
+                period="max",
+                interval="1mo",
+                auto_adjust=True,
+                progress=False
+            )
+
+            if (
+                df is None
+                or df.empty
+                or len(df) < 60
+            ):
+                continue
+
+            close = df["Close"].to_numpy()
+            high = df["High"].to_numpy()
+            volume = df["Volume"].to_numpy()
+
+            current_close = s(close[-1])
+            current_volume = s(volume[-1])
+
+            if current_close < MIN_PRICE:
+                continue
+
+            # =========================
+            # ATH BREAKOUT
+            # =========================
+
+            ath = np.max(high)
+
+            ath_hits = np.where(
+                high >= ath * 0.999
+            )[0]
+
+            if len(ath_hits) == 0:
+                continue
+
+            last_ath_index = ath_hits[-1]
+
+            current_index = len(high) - 1
+
+            consolidation_months = (
+                current_index - last_ath_index
+            )
+
+            # minimum 3 years base
+            if consolidation_months < 36:
+                continue
+
+            breakout = current_close >= ath
+
+            if not breakout:
+                continue
+
+            # =========================
+            # VOLUME
+            # =========================
+
+            avg_volume = s(
+                np.mean(
+                    volume[-VOLUME_LOOKBACK:-1]
+                )
+            )
+
+            if avg_volume == 0:
+                continue
+
+            volume_ratio = (
+                current_volume / avg_volume
+            )
+
+            if volume_ratio < MIN_VOLUME_RATIO:
+                continue
+
+            # =========================
+            # SCORE
+            # =========================
+
+            breakout_strength = (
+                (current_close - ath) / ath
+            ) * 100
+
+            breakout_score = min(
+                max(breakout_strength * 2, 0),
+                30
+            )
+
+            volume_score = min(
+                volume_ratio * 10,
+                40
+            )
+
+            base_score = 30
+
+            score = min(
+                base_score
+                + breakout_score
+                + volume_score,
+                100
+            )
+
+            if score < 60:
+                continue
+
+            if score >= 80:
+                quality = "🔥 STRONG BREAKOUT"
+
+            elif score >= 70:
+                quality = "⚡ GOOD BREAKOUT"
+
+            else:
+                quality = "⚠️ WEAK BREAKOUT"
+
+            results.append(f"""
+
+STOCK: {stock}
+
+ATH Breakout: YES
+ATH: {ath:.2f}
+Close: {current_close:.2f}
+
+Volume Ratio: {volume_ratio:.2f}x
+Score: {score:.1f}/100
+
+Quality: {quality}
+
+""")
+
+            # Prevent Yahoo throttling
+            time.sleep(1)
+
+        except Exception as e:
+
+            print("Error in", stock, e)
+
+
+# =====================================
 # EMAIL
-# =========================
+# =====================================
 
-body = "\n\n-----------------\n\n".join(results) if results else "No breakouts found."
+body = (
+    "\n\n------------------------\n\n"
+    .join(results)
+    if results
+    else "No breakouts found."
+)
+
+print("\nEMAIL DEBUG")
+print("EMAIL_ADDRESS:", EMAIL_ADDRESS)
+print(
+    "EMAIL_PASSWORD EXISTS:",
+    EMAIL_PASSWORD is not None
+)
+print("TO_EMAIL:", TO_EMAIL)
 
 msg = MIMEText(body)
-msg["Subject"] = f"NSE Breakout Scanner - {datetime.now().date()}"
+
+msg["Subject"] = (
+    f"NSE Breakout Scanner - "
+    f"{datetime.now().date()}"
+)
+
 msg["From"] = EMAIL_ADDRESS
 msg["To"] = TO_EMAIL
 
+
+# =====================================
+# SEND EMAIL
+# =====================================
+
 try:
-    server = smtplib.SMTP("smtp.gmail.com", 587)
+
+    server = smtplib.SMTP(
+        "smtp.gmail.com",
+        587
+    )
+
     server.starttls()
-    server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+
+    server.login(
+        EMAIL_ADDRESS,
+        EMAIL_PASSWORD
+    )
+
     server.send_message(msg)
+
     server.quit()
 
-    print("EMAIL SENT SUCCESSFULLY")
+    print("\nEMAIL SENT SUCCESSFULLY")
 
 except Exception as e:
-    print("EMAIL ERROR:", e)
+
+    print("\nEMAIL ERROR:", e)
