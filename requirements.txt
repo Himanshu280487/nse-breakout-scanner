@@ -1,4 +1,4 @@
-requests
-pandas
+yfinance
 numpy
-zipfile36
+pandas
+requests
