@@ -7,42 +7,54 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 
-# NSE bhavcopy URL format
+# =====================================
+# NSE BHAVCOPY URL
+# =====================================
+
 BASE_URL = (
-    "https://archives.nseindia.com/content/historical/"
-    "EQUITIES/{year}/{month}/cm{day}{month}{year}bhav.csv.zip"
+    "https://archives.nseindia.com/content/"
+    "historical/EQUITIES/{year}/{month}/"
+    "cm{day}{month}{year}bhav.csv.zip"
 )
 
 
-# Request headers
-headers = {
+# =====================================
+# REQUEST HEADERS
+# =====================================
+
+HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "*/*",
     "Referer": "https://www.nseindia.com"
 }
 
 
+# =====================================
+# GET LATEST TRADING DAY
+# =====================================
+
 def get_latest_trading_day():
     """
-    Return latest NSE trading day
-    (skips Saturday and Sunday)
+    Returns latest trading day
+    using Indian timezone
     """
 
-    # Use Indian timezone
-    today = datetime(2025, 5, 24, tzinfo=ZoneInfo("Asia/Kolkata"))
+    today = datetime.now(
+        ZoneInfo("Asia/Kolkata")
+    )
 
-    # Saturday = 5
-    # Sunday = 6
+    # Skip weekends
     while today.weekday() >= 5:
         today -= timedelta(days=1)
 
     return today
 
 
+# =====================================
+# DOWNLOAD BHAVCOPY
+# =====================================
+
 def download_bhavcopy(date):
-    """
-    Download NSE bhavcopy for given date
-    """
 
     day = date.strftime("%d")
     month = date.strftime("%b").upper()
@@ -54,35 +66,33 @@ def download_bhavcopy(date):
         day=day
     )
 
-    print(f"Using trading day: {date.strftime('%d-%b-%Y')}")
-    print(f"Downloading: {url}")
+    print(
+        f"\nTrying: "
+        f"{date.strftime('%d-%b-%Y')}"
+    )
+
+    print("Downloading:", url)
 
     try:
 
         response = requests.get(
             url,
-            headers=headers,
-            timeout=15
+            headers=HEADERS,
+            timeout=20
         )
 
         if response.status_code != 200:
-            print(
-                f"No data available for "
-                f"{date.strftime('%d-%b-%Y')}"
-            )
+            print("No data found")
             return None
 
-        # Open zip file from memory
-        zip_data = zipfile.ZipFile(
+        zip_file = zipfile.ZipFile(
             io.BytesIO(response.content)
         )
 
-        # Get CSV filename
-        csv_file = zip_data.namelist()[0]
+        csv_name = zip_file.namelist()[0]
 
-        # Read CSV into dataframe
         df = pd.read_csv(
-            zip_data.open(csv_file)
+            zip_file.open(csv_name)
         )
 
         return df
@@ -92,13 +102,62 @@ def download_bhavcopy(date):
         return None
 
 
-if __name__ == "__main__":
-    print("Current IST Time:", datetime.now(ZoneInfo("Asia/Kolkata")))
-    latest_day = get_latest_trading_day()
+# =====================================
+# FIND AVAILABLE BHAVCOPY
+# =====================================
 
-    df = download_bhavcopy(latest_day)
+def find_available_bhavcopy():
+
+    date = get_latest_trading_day()
+
+    # Try previous 7 trading days
+    for _ in range(7):
+
+        df = download_bhavcopy(date)
+
+        if df is not None:
+            print(
+                f"\nSUCCESS: "
+                f"{date.strftime('%d-%b-%Y')}"
+            )
+            return df
+
+        # Move back 1 day
+        date -= timedelta(days=1)
+
+        # Skip weekends
+        while date.weekday() >= 5:
+            date -= timedelta(days=1)
+
+    return None
+
+
+# =====================================
+# MAIN
+# =====================================
+
+if __name__ == "__main__":
+
+    print(
+        "Current IST Time:",
+        datetime.now(
+            ZoneInfo("Asia/Kolkata")
+        )
+    )
+
+    df = find_available_bhavcopy()
 
     if df is not None:
+
         print("\nBhavcopy Loaded Successfully")
+
         print(df.head())
+
         print("\nTotal Rows:", len(df))
+
+    else:
+
+        print(
+            "\nERROR: Could not download "
+            "any recent bhavcopy"
+        )
