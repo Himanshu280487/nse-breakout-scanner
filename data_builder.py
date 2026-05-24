@@ -2,11 +2,19 @@ import requests
 import zipfile
 import pandas as pd
 import io
+
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 
 # NSE bhavcopy URL format
-BASE_URL = "https://archives.nseindia.com/content/historical/EQUITIES/{year}/{month}/cm{day}{month}{year}bhav.csv.zip"
+BASE_URL = (
+    "https://archives.nseindia.com/content/historical/"
+    "EQUITIES/{year}/{month}/cm{day}{month}{year}bhav.csv.zip"
+)
 
+
+# Request headers
 headers = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "*/*",
@@ -16,12 +24,15 @@ headers = {
 
 def get_latest_trading_day():
     """
-    Return latest trading day (skip weekends)
+    Return latest NSE trading day
+    (skips Saturday and Sunday)
     """
 
-    today = datetime.today()
+    # Use Indian timezone
+    today = datetime.now(ZoneInfo("Asia/Kolkata"))
 
-    # Saturday = 5, Sunday = 6
+    # Saturday = 5
+    # Sunday = 6
     while today.weekday() >= 5:
         today -= timedelta(days=1)
 
@@ -30,7 +41,7 @@ def get_latest_trading_day():
 
 def download_bhavcopy(date):
     """
-    Download NSE bhavcopy for a given date
+    Download NSE bhavcopy for given date
     """
 
     day = date.strftime("%d")
@@ -43,20 +54,36 @@ def download_bhavcopy(date):
         day=day
     )
 
+    print(f"Using trading day: {date.strftime('%d-%b-%Y')}")
     print(f"Downloading: {url}")
 
     try:
-        r = requests.get(url, headers=headers, timeout=10)
 
-        if r.status_code != 200:
-            print(f"No data available for {date.strftime('%d-%b-%Y')}")
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            print(
+                f"No data available for "
+                f"{date.strftime('%d-%b-%Y')}"
+            )
             return None
 
-        z = zipfile.ZipFile(io.BytesIO(r.content))
+        # Open zip file from memory
+        zip_data = zipfile.ZipFile(
+            io.BytesIO(response.content)
+        )
 
-        file_name = z.namelist()[0]
+        # Get CSV filename
+        csv_file = zip_data.namelist()[0]
 
-        df = pd.read_csv(z.open(file_name))
+        # Read CSV into dataframe
+        df = pd.read_csv(
+            zip_data.open(csv_file)
+        )
 
         return df
 
@@ -69,10 +96,9 @@ if __name__ == "__main__":
 
     latest_day = get_latest_trading_day()
 
-    print("Using trading day:", latest_day.strftime("%d-%b-%Y"))
-
     df = download_bhavcopy(latest_day)
 
     if df is not None:
+        print("\nBhavcopy Loaded Successfully")
         print(df.head())
-        print("\nRows:", len(df))
+        print("\nTotal Rows:", len(df))
