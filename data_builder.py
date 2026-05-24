@@ -35,12 +35,15 @@ HEADERS = {
 
 def get_latest_trading_day():
     """
-    Returns latest trading day
-    using Indian timezone
+    Return latest NSE trading day
     """
 
-    today = datetime.now(
-        ZoneInfo("Asia/Kolkata")
+    # TEMP FIX FOR WRONG SERVER CLOCK
+    today = datetime(
+        2025,
+        5,
+        24,
+        tzinfo=ZoneInfo("Asia/Kolkata")
     )
 
     # Skip weekends
@@ -116,10 +119,12 @@ def find_available_bhavcopy():
         df = download_bhavcopy(date)
 
         if df is not None:
+
             print(
                 f"\nSUCCESS: "
                 f"{date.strftime('%d-%b-%Y')}"
             )
+
             return df
 
         # Move back 1 day
