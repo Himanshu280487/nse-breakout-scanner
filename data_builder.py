@@ -29,7 +29,7 @@ def get_latest_trading_day():
     """
 
     # Use Indian timezone
-    today = datetime.now(ZoneInfo("Asia/Kolkata"))
+    today = datetime(2025, 5, 24, tzinfo=ZoneInfo("Asia/Kolkata"))
 
     # Saturday = 5
     # Sunday = 6
