@@ -23,9 +23,16 @@ BASE_URL = (
 # =====================================
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0",
+    "User-Agent": (
+        "Mozilla/5.0 "
+        "(Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/124.0 Safari/537.36"
+    ),
     "Accept": "*/*",
-    "Referer": "https://www.nseindia.com"
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/"
 }
 
 
@@ -78,16 +85,43 @@ def download_bhavcopy(date):
 
     try:
 
-        response = requests.get(
+        session = requests.Session()
+
+        # Visit NSE homepage first
+        session.get(
+            "https://www.nseindia.com",
+            headers=HEADERS,
+            timeout=20
+        )
+
+        # Small delay
+        import time
+        time.sleep(2)
+
+        # Download bhavcopy
+        response = session.get(
             url,
             headers=HEADERS,
             timeout=20
         )
 
         if response.status_code != 200:
-            print("No data found")
+
+            print(
+                "HTTP Error:",
+                response.status_code
+            )
+
             return None
 
+        # NSE sometimes returns HTML block page
+        if b"<!DOCTYPE html>" in response.content[:200]:
+
+            print("NSE blocked request")
+
+            return None
+
+        # Read ZIP file
         zip_file = zipfile.ZipFile(
             io.BytesIO(response.content)
         )
@@ -101,7 +135,9 @@ def download_bhavcopy(date):
         return df
 
     except Exception as e:
+
         print("Error:", e)
+
         return None
 
 
@@ -127,7 +163,7 @@ def find_available_bhavcopy():
 
             return df
 
-        # Move back 1 day
+        # Go back 1 day
         date -= timedelta(days=1)
 
         # Skip weekends
