@@ -5,6 +5,7 @@ import requests
 import os
 import smtplib
 import time
+import io
 
 from email.mime.text import MIMEText
 from datetime import datetime
@@ -65,12 +66,14 @@ def get_nse_stocks():
 
         session = requests.Session()
 
+        # Visit NSE homepage first
         session.get(
             "https://www.nseindia.com",
             headers=headers,
             timeout=20
         )
 
+        # Download stock list CSV
         response = session.get(
             url,
             headers=headers,
@@ -79,11 +82,17 @@ def get_nse_stocks():
 
         response.raise_for_status()
 
-        df = pd.read_csv(response.text.splitlines())
+        # Read CSV correctly
+        df = pd.read_csv(
+            io.StringIO(response.text)
+        )
 
-        # Keep only EQ series
-        df = df[df[" SERIES"] == "EQ"]
+        # Keep only EQ stocks
+        df = df[
+            df[" SERIES"].astype(str).str.strip() == "EQ"
+        ]
 
+        # Convert to Yahoo Finance symbols
         stocks = (
             df["SYMBOL"]
             .dropna()
@@ -110,7 +119,7 @@ def s(x):
 
 
 # =====================================
-# LOAD STOCKS
+# MAIN START
 # =====================================
 
 print("\n========================")
@@ -131,7 +140,7 @@ if len(stocks) == 0:
 
 
 # =====================================
-# SCANNER
+# SCANNER LOOP
 # =====================================
 
 for i in range(0, len(stocks), BATCH_SIZE):
@@ -166,12 +175,13 @@ for i in range(0, len(stocks), BATCH_SIZE):
             current_close = s(close[-1])
             current_volume = s(volume[-1])
 
+            # Minimum price filter
             if current_close < MIN_PRICE:
                 continue
 
-            # =========================
+            # =====================================
             # ATH BREAKOUT
-            # =========================
+            # =====================================
 
             ath = np.max(high)
 
@@ -190,7 +200,7 @@ for i in range(0, len(stocks), BATCH_SIZE):
                 current_index - last_ath_index
             )
 
-            # minimum 3 years base
+            # Minimum 3 years base
             if consolidation_months < 36:
                 continue
 
@@ -199,9 +209,9 @@ for i in range(0, len(stocks), BATCH_SIZE):
             if not breakout:
                 continue
 
-            # =========================
-            # VOLUME
-            # =========================
+            # =====================================
+            # VOLUME FILTER
+            # =====================================
 
             avg_volume = s(
                 np.mean(
@@ -219,9 +229,9 @@ for i in range(0, len(stocks), BATCH_SIZE):
             if volume_ratio < MIN_VOLUME_RATIO:
                 continue
 
-            # =========================
-            # SCORE
-            # =========================
+            # =====================================
+            # SCORING
+            # =====================================
 
             breakout_strength = (
                 (current_close - ath) / ath
@@ -249,6 +259,10 @@ for i in range(0, len(stocks), BATCH_SIZE):
             if score < 60:
                 continue
 
+            # =====================================
+            # QUALITY LABEL
+            # =====================================
+
             if score >= 80:
                 quality = "🔥 STRONG BREAKOUT"
 
@@ -257,6 +271,10 @@ for i in range(0, len(stocks), BATCH_SIZE):
 
             else:
                 quality = "⚠️ WEAK BREAKOUT"
+
+            # =====================================
+            # SAVE RESULT
+            # =====================================
 
             results.append(f"""
 
@@ -282,7 +300,7 @@ Quality: {quality}
 
 
 # =====================================
-# EMAIL
+# EMAIL BODY
 # =====================================
 
 body = (
